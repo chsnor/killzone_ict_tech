@@ -16,6 +16,10 @@ input int    InpBrokerOffsetHours = 5;         // Broker UTC Offset (e.g., 5 for
 input bool   InpNoWeekends        = true;      // Halt Trading Over Weekends
 input ulong  InpMagicNumber       = 1337001;   // Magic Number
 
+input string InpDividerTP         = "--- Target/RR Settings ---";
+input double InpModel1TargetR     = 1.0;       // Model 1: Take Profit (R)
+input double InpModel2TargetR     = 1.0;       // Model 2: Take Profit (R)
+
 input string InpDivider1          = "--- Alert Settings ---";
 input bool   InpEnableTelegram    = false;     // Enable Telegram Alerts
 input string InpTelegramToken     = "";        // Telegram Bot Token
@@ -142,19 +146,9 @@ void SendAlert(string msg)
    }
 }
 
-double GetSymbolThreshold()
-{
-   string sym = _Symbol;
-   if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0) return 15.0;
-   if(StringFind(sym, "BTC") >= 0) return 1000.0;
-   if(StringFind(sym, "ETH") >= 0) return 20.0;
-   return 0.0050;
-}
 
-double GetExpansionMultiplier(double range)
-{
-   return (range > GetSymbolThreshold()) ? 0.5 : 1.0;
-}
+
+
 
 double NormalizePrice(double price)
 {
@@ -311,7 +305,7 @@ void InitPendingOrder(SessionBlock &refSess)
    g_Plan.rangeSize    = refSess.range;
    
    bool isBullish = (refSess.close >= refSess.midline);
-   double expMultiplier = GetExpansionMultiplier(refSess.range);
+   double expMultiplier = InpModel1TargetR;
    
    g_Plan.isLong = isBullish;
    if(isBullish)
@@ -470,7 +464,7 @@ void ProcessExecutionStateMachine()
    
    if(!hasPosition && g_Plan.state == STATE_PENDING_LIMIT)
    {
-      double exp = GetExpansionMultiplier(g_Plan.rangeSize);
+      double exp = InpModel1TargetR;
       
       if(g_Plan.isLong && prevClose > g_Plan.boundaryHigh && prev2Close <= g_Plan.boundaryHigh)
       {
@@ -536,7 +530,7 @@ void ProcessExecutionStateMachine()
          g_Plan.isLong     = newIsLong;
          g_Plan.entryPrice = NormalizePrice(mktEntry);
          g_Plan.slPrice    = NormalizePrice(sweepExt);
-         g_Plan.tpPrice    = NormalizePrice(newIsLong ? (mktEntry + g_Plan.rangeSize) : (mktEntry - g_Plan.rangeSize));
+         g_Plan.tpPrice    = NormalizePrice(newIsLong ? (mktEntry + (g_Plan.rangeSize * InpModel2TargetR)) : (mktEntry - (g_Plan.rangeSize * InpModel2TargetR)));
          
          double lots = CalculateLotSize(mktEntry, g_Plan.slPrice);
          ENUM_ORDER_TYPE oType = newIsLong ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
