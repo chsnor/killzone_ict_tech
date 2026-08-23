@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Senior Quantitative Developer"
 #property link      ""
-#property version   "5.10"
+#property version   "5.20"
 
 #include <Trade\Trade.mqh>
 #include <Trade\SymbolInfo.mqh>
@@ -14,6 +14,13 @@ input double InpRiskPercent       = 2.0;       // Risk Per Trade (%)
 input double InpMinLots           = 0.01;      // Minimum Lots
 input int    InpBrokerOffsetHours = 5;         // Broker UTC Offset (e.g., 5 for GMT+3/UTC-5 NY)
 input bool   InpNoWeekends        = true;      // Halt Trading Over Weekends
+
+input string InpDivider1          = "--- Alert Settings ---";
+input bool   InpEnableTelegram    = false;     // Enable Telegram Alerts
+input string InpTelegramToken     = "";        // Telegram Bot Token
+input string InpTelegramChatID    = "";        // Telegram Chat ID
+input bool   InpEnableLineNotify  = false;     // Enable LINE Notify
+input string InpLineToken         = "";        // LINE Notify Token
 
 //--- Enums
 enum ENUM_STATE 
@@ -93,6 +100,47 @@ datetime       g_LastBarTime = 0;
 //+------------------------------------------------------------------+
 //| UTILITY FUNCTIONS                                                |
 //+------------------------------------------------------------------+
+void SendAlert(string msg)
+{
+   Print(msg);
+   
+   if(InpEnableTelegram && StringLen(InpTelegramToken) > 0 && StringLen(InpTelegramChatID) > 0)
+   {
+      string url = "https://api.telegram.org/bot" + InpTelegramToken + "/sendMessage";
+      string headers = "Content-Type: application/json\r\n";
+      string msgEsc = msg;
+      StringReplace(msgEsc, "\n", "\\n");
+      StringReplace(msgEsc, "\r", "");
+      StringReplace(msgEsc, "\"", "\\\"");
+      string payload = "{\"chat_id\":\"" + InpTelegramChatID + "\",\"text\":\"" + msgEsc + "\"}";
+      
+      char post[], result[];
+      string resHeaders;
+      StringToCharArray(payload, post, 0, WHOLE_ARRAY, CP_UTF8);
+      ArrayResize(post, ArraySize(post)-1);
+      
+      int res = WebRequest("POST", url, headers, 5000, post, result, resHeaders);
+      if(res != 200) Print("Telegram Alert Error: ", res);
+   }
+   
+   if(InpEnableLineNotify && StringLen(InpLineToken) > 0)
+   {
+      string url = "https://notify-api.line.me/api/notify";
+      string headers = "Authorization: Bearer " + InpLineToken + "\r\n";
+      headers += "Content-Type: application/x-www-form-urlencoded\r\n";
+      
+      string payload = "message=" + msg;
+      
+      char post[], result[];
+      string resHeaders;
+      StringToCharArray(payload, post, 0, WHOLE_ARRAY, CP_UTF8);
+      ArrayResize(post, ArraySize(post)-1);
+      
+      int res = WebRequest("POST", url, headers, 5000, post, result, resHeaders);
+      if(res != 200) Print("LINE Alert Error: ", res);
+   }
+}
+
 double GetSymbolThreshold()
 {
    string sym = _Symbol;
@@ -293,9 +341,12 @@ void InitPendingOrder(SessionBlock &refSess)
       g_Plan.pendingTicket = g_Trade.ResultOrder();
       g_Plan.modelName = "Model 1: Pending";
       
-      // Initialize Sweep Extremes to valid session boundaries
       g_Plan.sweepHighExt = refSess.high;
       g_Plan.sweepLowExt  = refSess.low;
+      
+      string oTypeStr = isBullish ? "BUY LIMIT" : "SELL LIMIT";
+      string txt = StringFormat("⏳ [Model 1: Pending] %s %s\nEntry: %.5f\nSL: %.5f\nTP: %.5f", oTypeStr, _Symbol, adjEntry, g_Plan.slPrice, g_Plan.tpPrice);
+      SendAlert(txt);
    }
 }
 
@@ -307,7 +358,7 @@ void UpdateSessionTracking(datetime currentServerTime)
    if(dt.day != g_LastDay)
    {
       g_LastDay = dt.day;
-      PrintFormat("📅 [NEW DAY] Daily stats reset. Date: %d-%02d-%02d", dt.year, dt.mon, dt.day);
+      SendAlert(StringFormat("📅 [NEW DAY] Daily stats reset. Date: %d-%02d-%02d", dt.year, dt.mon, dt.day));
    }
    
    int brokerMin = dt.hour * 60 + dt.min;
@@ -319,8 +370,11 @@ void UpdateSessionTracking(datetime currentServerTime)
    {
       if(dt.day_of_week == 6 || (dt.day_of_week == 0 && utc5Min < (17 * 60)))
       {
-         CancelAllPendingOrders();
-         g_Plan.state = STATE_SHUTDOWN;
+         if(g_Plan.state != STATE_SHUTDOWN)
+         {
+             CancelAllPendingOrders();
+             g_Plan.state = STATE_SHUTDOWN;
+         }
          return;
       }
    }
@@ -430,7 +484,11 @@ void ProcessExecutionStateMachine()
          IsStopsLevelViolated(ORDER_TYPE_BUY_LIMIT, g_Plan.entryPrice, adj);
          double lots = CalculateLotSize(adj, g_Plan.slPrice);
          if(g_Trade.OrderOpen(_Symbol, ORDER_TYPE_BUY_LIMIT, lots, 0.0, adj, g_Plan.slPrice, g_Plan.tpPrice, ORDER_TIME_GTC, 0, "Model 1: Breakout Shift"))
+         {
             g_Plan.pendingTicket = g_Trade.ResultOrder();
+            string txt = StringFormat("🔄 [Model 1: Breakout Shift] BUY LIMIT %s\nNew Entry: %.5f\nSL: %.5f\nTP: %.5f", _Symbol, adj, g_Plan.slPrice, g_Plan.tpPrice);
+            SendAlert(txt);
+         }
       }
       else if(!g_Plan.isLong && prevClose < g_Plan.boundaryLow && prev2Close >= g_Plan.boundaryLow)
       {
@@ -445,7 +503,11 @@ void ProcessExecutionStateMachine()
          IsStopsLevelViolated(ORDER_TYPE_SELL_LIMIT, g_Plan.entryPrice, adj);
          double lots = CalculateLotSize(adj, g_Plan.slPrice);
          if(g_Trade.OrderOpen(_Symbol, ORDER_TYPE_SELL_LIMIT, lots, 0.0, adj, g_Plan.slPrice, g_Plan.tpPrice, ORDER_TIME_GTC, 0, "Model 1: Breakout Shift"))
+         {
             g_Plan.pendingTicket = g_Trade.ResultOrder();
+            string txt = StringFormat("🔄 [Model 1: Breakout Shift] SELL LIMIT %s\nNew Entry: %.5f\nSL: %.5f\nTP: %.5f", _Symbol, adj, g_Plan.slPrice, g_Plan.tpPrice);
+            SendAlert(txt);
+         }
       }
    }
    
@@ -457,7 +519,7 @@ void ProcessExecutionStateMachine()
       bool sweptLow  = (g_Plan.sweepLowExt < g_Plan.boundaryLow);
       bool sweptHigh = (g_Plan.sweepHighExt > g_Plan.boundaryHigh);
       
-      bool bullRev = sweptLow && (prevClose > g_Plan.midline) && (prevClose > prevOpen);
+      bool bullRev = sweptLow  && (prevClose > g_Plan.midline) && (prevClose > prevOpen);
       bool bearRev = sweptHigh && (prevClose < g_Plan.midline) && (prevClose < prevOpen);
       
       if(bullRev || bearRev)
@@ -485,6 +547,10 @@ void ProcessExecutionStateMachine()
             if(pt == 0) pt = g_Trade.ResultOrder();
             if(pt == 0) HasActivePosition(pt);
             g_Plan.positionTicket = pt;
+            
+            string typeStr = newIsLong ? "BUY" : "SELL";
+            string txt = StringFormat("🔥 [Model 2: Sweep Reversal] %s %s\nEntry: %.5f\nSL (Wick): %.5f\nTP: %.5f", typeStr, _Symbol, mktEntry, g_Plan.slPrice, g_Plan.tpPrice);
+            SendAlert(txt);
          }
       }
    }
@@ -521,7 +587,9 @@ void CheckPendingToActive()
          g_Plan.positionTicket = activeTicket;
          g_Plan.pendingTicket  = 0;
          g_Plan.state          = STATE_ACTIVE_FILLED;
-         PrintFormat("✅ [ORDER FILLED] Position Opened. Ticket: %d", activeTicket);
+         
+         string txt = StringFormat("✅ [ORDER FILLED] %s Position Opened. Ticket: %d", _Symbol, activeTicket);
+         SendAlert(txt);
       }
    }
 }
@@ -563,13 +631,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
                   {
                      g_Plan.state = STATE_WAITING_SWEEP_CONFIRMATION;
                      g_Plan.positionTicket = 0;
-                     Print("⚠️ [SL HIT] Position closed. Transitioning to Sweep Reversal (Model 2).");
+                     SendAlert("⚠️ [SL HIT] " + _Symbol + " Position closed. Transitioning to Sweep Reversal (Model 2).");
                   }
                   else
                   {
                      g_Plan.state = STATE_CLOSED;
                      g_Plan.positionTicket = 0;
-                     Print("✅ [TP/MANUAL] Position closed safely. State -> CLOSED.");
+                     SendAlert("💰 [TP/MANUAL] " + _Symbol + " Position closed safely. State -> CLOSED.");
                   }
                }
             }
@@ -587,7 +655,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
             {
                g_Plan.state = STATE_CLOSED;
                g_Plan.pendingTicket = 0;
-               Print("🗑️ [ORDER CANCELLED] Pending Limit removed.");
+               SendAlert("🗑️ [ORDER CANCELLED] " + _Symbol + " Pending Limit removed.");
             }
          }
       }
