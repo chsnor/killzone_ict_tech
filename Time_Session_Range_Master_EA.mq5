@@ -14,6 +14,7 @@ input double InpRiskPercent       = 2.0;       // Risk Per Trade (%)
 input double InpMinLots           = 0.01;      // Minimum Lots
 input int    InpBrokerOffsetHours = 5;         // Broker UTC Offset (e.g., 5 for GMT+3/UTC-5 NY)
 input bool   InpNoWeekends        = true;      // Halt Trading Over Weekends
+input ulong  InpMagicNumber       = 1337001;   // Magic Number
 
 input string InpDivider1          = "--- Alert Settings ---";
 input bool   InpEnableTelegram    = false;     // Enable Telegram Alerts
@@ -563,7 +564,7 @@ int OnInit()
 {
    g_Symbol.Name(_Symbol);
    g_Symbol.RefreshRates();
-   g_Trade.SetExpertMagicNumber(1337001);
+   g_Trade.SetExpertMagicNumber(InpMagicNumber);
    
    InitSessions();
    g_Plan.state = STATE_CLOSED;
