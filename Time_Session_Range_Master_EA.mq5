@@ -67,9 +67,6 @@ input double InpMinLots           = 0.01;      // Minimum Lots
 input ulong  InpMagicNumber       = 1337001;   // Magic Number
 input bool   InpNoWeekends        = true;      // Halt Trading Over Weekends
 
-input string InpTargetDiv         = "=== TARGET/RR SETTINGS ===";
-input double InpModel1TargetR     = 1.0;       // Model 1: Take Profit (R)
-input double InpModel2TargetR     = 2.0;       // Model 2: Take Profit (R)
 
 input string InpFtmoDiv           = "=== FTMO SAFETY LIMITS ===";
 input double InpDailyMaxLossPercent = 4.0;     // Daily Max Loss Hard Stop (%)
@@ -194,6 +191,20 @@ void CancelAllPendingOrders()
       }
    }
    g_Plan.pendingTicket = 0;
+}
+
+double GetSymbolThreshold()
+{
+   string sym = _Symbol;
+   if(StringFind(sym, "XAU") >= 0 || StringFind(sym, "GOLD") >= 0) return 15.0;
+   if(StringFind(sym, "BTC") >= 0) return 1000.0;
+   if(StringFind(sym, "ETH") >= 0) return 20.0;
+   return 0.0050;
+}
+
+double GetExpansionMultiplier(double range)
+{
+   return (range > GetSymbolThreshold()) ? 0.5 : 1.0;
 }
 
 void FTMOCloseAll(string reason)
@@ -435,12 +446,14 @@ void InitPendingOrder(int sessionIndex)
    if(isLong)
    {
       g_Plan.slPrice = NormalizePrice(refSess.lowPrice);
-      g_Plan.tpPrice = NormalizePrice(entryPrice + (refSess.range * InpModel1TargetR));
+      double expMultiplier = GetExpansionMultiplier(refSess.range);
+      g_Plan.tpPrice = NormalizePrice(entryPrice + (refSess.range * expMultiplier));
    }
    else
    {
       g_Plan.slPrice = NormalizePrice(refSess.highPrice);
-      g_Plan.tpPrice = NormalizePrice(entryPrice - (refSess.range * InpModel1TargetR));
+      double expMultiplier = GetExpansionMultiplier(refSess.range);
+      g_Plan.tpPrice = NormalizePrice(entryPrice - (refSess.range * expMultiplier));
    }
    
    double adjEntry = NormalizePrice(entryPrice);
@@ -480,7 +493,8 @@ void ProcessExecutionStateMachine()
          
          double newEntry = isLong ? g_Plan.slPrice : g_Plan.slPrice;
          double newSl    = g_Plan.midline;
-         double newTp    = isLong ? (newEntry - (g_Plan.rangeSize * InpModel1TargetR)) : (newEntry + (g_Plan.rangeSize * InpModel1TargetR));
+         double exp = GetExpansionMultiplier(g_Plan.rangeSize);
+         double newTp    = isLong ? (newEntry - (g_Plan.rangeSize * exp)) : (newEntry + (g_Plan.rangeSize * exp));
          
          g_Plan.slPrice = NormalizePrice(newSl);
          g_Plan.tpPrice = NormalizePrice(newTp);
@@ -526,7 +540,7 @@ void ProcessExecutionStateMachine()
          double lots       = GetPositionSize(InpRiskPercent, slDist);
          
          double mktEntry   = SymbolInfoDouble(_Symbol, newIsLong ? SYMBOL_ASK : SYMBOL_BID);
-         g_Plan.tpPrice    = NormalizePrice(newIsLong ? (mktEntry + (g_Plan.rangeSize * InpModel2TargetR)) : (mktEntry - (g_Plan.rangeSize * InpModel2TargetR)));
+         g_Plan.tpPrice    = NormalizePrice(newIsLong ? (mktEntry + g_Plan.rangeSize) : (mktEntry - g_Plan.rangeSize));
          
          if(InpTradingMode == MODE_FTMO && SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpreadPoints) 
          {
