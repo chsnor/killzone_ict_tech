@@ -484,7 +484,8 @@ void ProcessExecutionStateMachine()
    
    if(g_Plan.state == STATE_PENDING_LIMIT && g_Plan.pendingTicket > 0)
    {
-      bool isLong = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_LIMIT);
+      OrderSelect(g_Plan.pendingTicket);
+        bool isLong = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_LIMIT);
       bool breakout = isLong ? (lastClose < g_Plan.slPrice) : (lastClose > g_Plan.slPrice);
       
       if(breakout)
