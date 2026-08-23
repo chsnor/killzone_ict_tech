@@ -1,0 +1,36 @@
+name: Auto Compile MQL5 (Windows)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.mq5'
+      - '**/*.mqh'
+      - 'metaeditor64.exe'
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Compile EA with MetaEditor
+        run: |
+          echo "Starting MetaEditor compilation..."
+          .\metaeditor64.exe /compile:Time_Session_Range_Master_EA.mq5 /log
+          echo "Compilation finished. Displaying log:"
+          if (Test-Path Time_Session_Range_Master_EA.log) {
+            Get-Content Time_Session_Range_Master_EA.log
+          } else {
+            echo "Log file not found!"
+          }
+
+      - name: Upload EX5 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Time_Session_Range_Master_EA-EX5
+          path: Time_Session_Range_Master_EA.ex5
+          retention-days: 7
