@@ -559,10 +559,18 @@ void ProcessExecutionStateMachine()
 
 void RenderDashboard()
 {
+   datetime currentServerTime = TimeCurrent();
+   datetime localTime = TimeLocal();
+   datetime gmtTime = TimeGMT();
+
    string modeTxt = (InpTradingMode == MODE_FTMO) ? "FTMO (Safety ON)" : "MAIN (Unlimited)";
    string db = "=== ICT Range Master v6.0 ===\n";
    db += "Symbol: " + _Symbol + " | Mode: " + modeTxt + "\n";
-   db += "Broker Offset: +" + IntegerToString(g_BrokerOffsetHours) + " UTC\n";
+   db += "--------------------------------------\n";
+   db += "Broker Time: " + TimeToString(currentServerTime, TIME_DATE|TIME_SECONDS) + " (Offset: +" + IntegerToString(g_BrokerOffsetHours) + " UTC)\n";
+   db += "Local Time : " + TimeToString(localTime, TIME_DATE|TIME_SECONDS) + "\n";
+   db += "GMT Time   : " + TimeToString(gmtTime, TIME_DATE|TIME_SECONDS) + "\n";
+   db += "--------------------------------------\n";
    db += "State: " + EnumToString(g_Plan.state) + "\n";
    db += "Model: " + g_Plan.modelName + "\n";
    if(InpTradingMode == MODE_FTMO)
