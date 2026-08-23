@@ -10,11 +10,17 @@
 #include <Trade\SymbolInfo.mqh>
 
 //--- Input Parameters
-input double InpRiskPercent       = 2.0;       // Risk Per Trade (%)
+input double InpRiskPercent       = 0.5;       // Risk Per Trade (%)
 input double InpMinLots           = 0.01;      // Minimum Lots
-input int    InpBrokerOffsetHours = 5;         // Broker UTC Offset (e.g., 5 for GMT+3/UTC-5 NY)
+input int    InpBrokerOffsetHours = 7;         // Broker UTC Offset (FTMO)
 input bool   InpNoWeekends        = true;      // Halt Trading Over Weekends
 input ulong  InpMagicNumber       = 1337001;   // Magic Number
+
+input string InpDividerFTMO       = "--- FTMO Settings ---";
+input double InpDailyMaxLossPercent = 4.0;     // Daily Max Loss Hard Stop (%)
+input int    InpFridayCloseHour   = 23;        // Friday Force Close (Hour)
+input int    InpFridayCloseMin    = 45;        // Friday Force Close (Minute)
+input int    InpMaxSpreadPoints   = 30;        // Max Spread (Points)
 
 input string InpDivider1          = "--- Alert Settings ---";
 input bool   InpEnableTelegram    = false;     // Enable Telegram Alerts
@@ -98,9 +104,30 @@ ExecutionPlan  g_Plan;
 int            g_LastDay = -1;
 datetime       g_LastBarTime = 0;
 
+// FTMO Globals
+double         g_StartOfDayEquity = 0.0;
+bool           g_HardStopActive   = false;
+
 //+------------------------------------------------------------------+
 //| UTILITY FUNCTIONS                                                |
 //+------------------------------------------------------------------+
+void FTMOCloseAll(string reason)
+{
+   SendAlert("🚨 [FTMO FORCE CLOSE] " + reason + " - Closing all active positions and orders!");
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong pt = PositionGetTicket(i);
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol && PositionGetInteger(POSITION_MAGIC) == g_Trade.RequestMagic())
+      {
+         g_Trade.PositionClose(pt);
+      }
+   }
+   
+   CancelAllPendingOrders();
+   g_Plan.state = STATE_SHUTDOWN;
+}
+
 void SendAlert(string msg)
 {
    Print(msg);
@@ -336,6 +363,7 @@ void InitPendingOrder(SessionBlock &refSess)
    CancelAllPendingOrders();
    g_Symbol.RefreshRates();
    
+   if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpreadPoints) { SendAlert("Spread too high, skipping Model 1 pending."); return; }
    if(g_Trade.OrderOpen(_Symbol, oType, lots, 0.0, adjEntry, g_Plan.slPrice, g_Plan.tpPrice, ORDER_TIME_GTC, 0, "Model 1: Target"))
    {
       g_Plan.state = STATE_PENDING_LIMIT;
@@ -359,8 +387,11 @@ void UpdateSessionTracking(datetime currentServerTime)
    if(dt.day != g_LastDay)
    {
       g_LastDay = dt.day;
-      SendAlert(StringFormat("📅 [NEW DAY] Daily stats reset. Date: %d-%02d-%02d", dt.year, dt.mon, dt.day));
+      g_StartOfDayEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+      g_HardStopActive = false;
+      SendAlert(StringFormat("📅 [NEW DAY] Daily stats reset. Date: %d-%02d-%02d | Start Equity: %.2f", dt.year, dt.mon, dt.day, g_StartOfDayEquity));
    }
+
    
    int brokerMin = dt.hour * 60 + dt.min;
    int utc5Min = brokerMin - (InpBrokerOffsetHours * 60);
@@ -484,6 +515,7 @@ void ProcessExecutionStateMachine()
          double adj = g_Plan.entryPrice;
          IsStopsLevelViolated(ORDER_TYPE_BUY_LIMIT, g_Plan.entryPrice, adj);
          double lots = CalculateLotSize(adj, g_Plan.slPrice);
+         if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpreadPoints) { SendAlert("Spread too high, skipping Model 1 Shift."); return; }
          if(g_Trade.OrderOpen(_Symbol, ORDER_TYPE_BUY_LIMIT, lots, 0.0, adj, g_Plan.slPrice, g_Plan.tpPrice, ORDER_TIME_GTC, 0, "Model 1: Breakout Shift"))
          {
             g_Plan.pendingTicket = g_Trade.ResultOrder();
@@ -503,6 +535,7 @@ void ProcessExecutionStateMachine()
          double adj = g_Plan.entryPrice;
          IsStopsLevelViolated(ORDER_TYPE_SELL_LIMIT, g_Plan.entryPrice, adj);
          double lots = CalculateLotSize(adj, g_Plan.slPrice);
+         if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpreadPoints) { SendAlert("Spread too high, skipping Model 1 Shift."); return; }
          if(g_Trade.OrderOpen(_Symbol, ORDER_TYPE_SELL_LIMIT, lots, 0.0, adj, g_Plan.slPrice, g_Plan.tpPrice, ORDER_TIME_GTC, 0, "Model 1: Breakout Shift"))
          {
             g_Plan.pendingTicket = g_Trade.ResultOrder();
@@ -541,6 +574,7 @@ void ProcessExecutionStateMachine()
          double lots = CalculateLotSize(mktEntry, g_Plan.slPrice);
          ENUM_ORDER_TYPE oType = newIsLong ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
          
+         if(SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) > InpMaxSpreadPoints) { SendAlert("Spread too high, skipping Model 2 Sweep."); return; }
          if(g_Trade.PositionOpen(_Symbol, oType, lots, 0.0, g_Plan.slPrice, g_Plan.tpPrice, "Model 2: Rev"))
          {
             lastModel2BarTime = rates[0].time;
@@ -599,6 +633,33 @@ void OnTick()
 {
    datetime currentServerTime = TimeCurrent();
    UpdateSessionTracking(currentServerTime);
+   
+   // FTMO: Friday Force Close
+   MqlDateTime dt;
+   TimeToStruct(currentServerTime, dt);
+   if(dt.day_of_week == 5 && (dt.hour > InpFridayCloseHour || (dt.hour == InpFridayCloseHour && dt.min >= InpFridayCloseMin)))
+   {
+      if(g_Plan.state != STATE_SHUTDOWN)
+      {
+         FTMOCloseAll("Friday Trading Hours Over");
+      }
+      return;
+   }
+   
+   // FTMO: Daily Max Loss Hard Stop
+   if(!g_HardStopActive && g_StartOfDayEquity > 0)
+   {
+      double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double maxLossEquity = g_StartOfDayEquity * (1.0 - (InpDailyMaxLossPercent / 100.0));
+      if(currentEquity <= maxLossEquity)
+      {
+         g_HardStopActive = true;
+         FTMOCloseAll(StringFormat("Daily Max Loss Reached! Equity dropped to %.2f (Limit: %.2f)", currentEquity, maxLossEquity));
+         return;
+      }
+   }
+   
+   if(g_HardStopActive || g_Plan.state == STATE_SHUTDOWN) return;
    
    CheckPendingToActive();
    
