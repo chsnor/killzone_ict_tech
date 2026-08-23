@@ -61,6 +61,9 @@ struct ExecutionPlan
 input string InpModeDiv           = "=== TRADING MODE ===";
 input ENUM_TRADING_MODE InpTradingMode = MODE_FTMO; // Select Trading Mode
 
+input string InpTimeDiv           = "=== TIMEZONE SETTINGS ===";
+input int    InpBrokerOffset      = 99;        // Broker UTC Offset (99 = Auto Detect)
+
 input string InpRiskDiv           = "=== RISK MANAGEMENT ===";
 input double InpRiskPercent       = 1.0;       // Risk Per Trade (%)
 input double InpMinLots           = 0.01;      // Minimum Lots
@@ -115,6 +118,20 @@ string GetCleanSymbol()
 
 int CalculateBrokerOffset()
 {
+   if(InpBrokerOffset != 99) 
+   {
+      return InpBrokerOffset;
+   }
+   
+   if(MQLInfoInteger(MQL_TESTER))
+   {
+      // Strategy Tester simulates GMT incorrectly. Default to standard NY Close (+3 or +2).
+      // Assuming UTC+3 (XM, FTMO, IC Markets standard)
+      Print("⚠️ [TESTER MODE] Auto-Detect disabled in backtest. Defaulting to +3 (NY Close).");
+      return 3; 
+   }
+
+   // Live/Demo Forward Trading Auto-Detection
    datetime symTime = (datetime)SymbolInfoInteger(_Symbol, SYMBOL_TIME);
    if (symTime == 0) symTime = TimeTradeServer();
    datetime gmtTime = TimeGMT();
